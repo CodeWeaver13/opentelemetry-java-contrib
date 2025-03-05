@@ -29,20 +29,31 @@ Configuration can be provided through:
   `otel.jmx.service.url=service:jmx:rmi:///jndi/rmi://tomcat:9010/jmxrmi` is written to stdin.
 - environment variables: `OTEL_JMX_TARGET_SYSTEM=tomcat OTEL_JMX_SERVICE_URL=service:jmx:rmi:///jndi/rmi://tomcat:9010/jmxrmi java -jar scraper.jar`
 
-SDK auto-configuration is being used, so all the configuration options can be set using the java
+SDK autoconfiguration is being used, so all the configuration options can be set using the java
 properties syntax or the corresponding environment variables.
 
 For example the `otel.jmx.service.url` option can be set with the `OTEL_JMX_SERVICE_URL` environment variable.
 
 ## Configuration reference
 
-| config option            | description                                                                                                         |
-|--------------------------|---------------------------------------------------------------------------------------------------------------------|
-| `otel.jmx.service.url`   | mandatory JMX URL to connect to the remote JVM                                                                      |
-| `otel.jmx.target.system` | comma-separated list of systems to monitor, mandatory unless a custom configuration is used                         |
-| `otel.jmx.config`        | comma-separated list of paths to custom YAML metrics definition, mandatory when `otel.jmx.target.system` is not set |
-| `otel.jmx.username`      | user name for JMX connection, mandatory when JMX authentication is enabled on target JVM                            |
-| `otel.jmx.password`      | password for JMX connection, mandatory when JMX authentication is enabled on target JVM                             |
+| config option                  | default value | description                                                                                                                                                 |
+|--------------------------------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `otel.jmx.service.url`         | -             | mandatory JMX URL to connect to the remote JVM                                                                                                              |
+| `otel.jmx.target.system`       | -             | comma-separated list of systems to monitor, mandatory unless `otel.jmx.config` is set                                                                       |
+| `otel.jmx.config`              | empty         | comma-separated list of paths to custom YAML metrics definition, mandatory when `otel.jmx.target.system` is not set                                         |
+| `otel.jmx.username`            | -             | user name for JMX connection, mandatory when JMX authentication is set on target JVM with`com.sun.management.jmxremote.authenticate=true`                   |
+| `otel.jmx.password`            | -             | password for JMX connection, mandatory when JMX authentication is set on target JVM with `com.sun.management.jmxremote.authenticate=true`                   |
+| `otel.jmx.remote.registry.ssl` | `false`       | connect to an SSL-protected registry when enabled on target JVM with `com.sun.management.jmxremote.registry.ssl=true`                                       |
+| `otel.jmx.remote.profile`      | -             | SASL remote profile, supported values are `SASL/PLAIN`, `SASL/DIGEST-MD5`, `SASL/CRAM-MD5`, `TLS SASL/PLAIN`, `TLS SASL/DIGEST-MD5` and `TLS SASL/CRAM-MD5` |
+| `otel.jmx.realm`               | -             | Realm required by profile `SASL/DIGEST-MD5` or `TLS SASL/DIGEST-MD5`                                                                                        |
+
+When both `otel.jmx.target.system` and `otel.jmx.config` configuration options are used at the same time:
+
+- `otel.jmx.target.system` provides ready-to-use metrics and `otel.jmx.config` allows to add custom definitions.
+- The metrics definitions will be the aggregation of both.
+- There is no guarantee on the priority or any ability to override the definitions.
+
+If there is a need to override existing ready-to-use metrics or to keep control on the metrics definitions, using a custom YAML definition with `otel.jmx.config` is the recommended option.
 
 Supported values for `otel.jmx.target.system`:
 
@@ -81,8 +92,19 @@ be set through the standard `JAVA_TOOL_OPTIONS` environment variable using the `
 
 ## Troubleshooting
 
+### Exported metrics
+
 In order to investigate when and what metrics are being captured and sent, setting the `otel.metrics.exporter`
-configuration option to include `logging` exporter provides log messages when metrics are being exported.
+configuration option to include `logging` exporter provides log messages when metrics are being exported
+
+### JMX connection test
+
+Connection to the remote JVM through the JMX can be tested by adding the `-test` argument.
+When doing so, the JMX Scraper will only test the connection to the remote JVM with provided configuration
+and exit.
+
+- Connection OK: `JMX connection test OK` message is written to standard output and exit status = `0`
+- Connection ERROR: `JMX connection test ERROR` message is written to standard output and exit status = `1`
 
 ## Extra libraries in classpath
 

@@ -8,8 +8,11 @@ package io.opentelemetry.contrib.jmxscraper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -28,6 +31,10 @@ public class JmxScraperContainer extends GenericContainer<JmxScraperContainer> {
   private String user;
   private String password;
   private final List<String> extraJars;
+  private boolean testJmx;
+  private TestKeyStore keyStore;
+  private TestKeyStore trustStore;
+  private boolean sslRmiRegistry;
 
   public JmxScraperContainer(String otlpEndpoint, String baseImage) {
     super(baseImage);
@@ -35,10 +42,7 @@ public class JmxScraperContainer extends GenericContainer<JmxScraperContainer> {
     String scraperJarPath = System.getProperty("shadow.jar.path");
     assertThat(scraperJarPath).isNotNull();
 
-    this.withCopyFileToContainer(MountableFile.forHostPath(scraperJarPath), "/scraper.jar")
-        .waitingFor(
-            Wait.forLogMessage(".*JMX scraping started.*", 1)
-                .withStartupTimeout(Duration.ofSeconds(10)));
+    this.withCopyFileToContainer(MountableFile.forHostPath(scraperJarPath), "/scraper.jar");
 
     this.endpoint = otlpEndpoint;
     this.targetSystems = new HashSet<>();
@@ -46,20 +50,38 @@ public class JmxScraperContainer extends GenericContainer<JmxScraperContainer> {
     this.extraJars = new ArrayList<>();
   }
 
+  /**
+   * Adds a target system
+   *
+   * @param targetSystem target system
+   * @return this
+   */
   @CanIgnoreReturnValue
   public JmxScraperContainer withTargetSystem(String targetSystem) {
     targetSystems.add(targetSystem);
     return this;
   }
 
+  /**
+   * Set connection to a standard JMX service URL
+   *
+   * @param host JMX host
+   * @param port JMX port
+   * @return this
+   */
   @CanIgnoreReturnValue
   public JmxScraperContainer withRmiServiceUrl(String host, int port) {
-    // TODO: adding a way to provide 'host:port' syntax would make this easier for end users
     return withServiceUrl(
         String.format(
             Locale.getDefault(), "service:jmx:rmi:///jndi/rmi://%s:%d/jmxrmi", host, port));
   }
 
+  /**
+   * Set connection to a JMX service URL
+   *
+   * @param serviceUrl service URL
+   * @return this
+   */
   @CanIgnoreReturnValue
   public JmxScraperContainer withServiceUrl(String serviceUrl) {
     this.serviceUrl = serviceUrl;
@@ -102,9 +124,61 @@ public class JmxScraperContainer extends GenericContainer<JmxScraperContainer> {
     return this;
   }
 
+  /**
+   * Adds custom metrics yaml from classpath resource
+   *
+   * @param yamlPath path to resource in classpath
+   * @return this
+   */
   @CanIgnoreReturnValue
   public JmxScraperContainer withCustomYaml(String yamlPath) {
     this.customYamlFiles.add(yamlPath);
+    return this;
+  }
+
+  /**
+   * Configure the scraper JVM to only test connection with the JMX endpoint
+   *
+   * @return this
+   */
+  @CanIgnoreReturnValue
+  public JmxScraperContainer withTestJmx() {
+    this.testJmx = true;
+    return this;
+  }
+
+  /**
+   * Configure key store for the scraper JVM
+   *
+   * @param keyStore key store
+   * @return this
+   */
+  @CanIgnoreReturnValue
+  public JmxScraperContainer withKeyStore(TestKeyStore keyStore) {
+    this.keyStore = keyStore;
+    return this;
+  }
+
+  /**
+   * Configure trust store for the scraper JVM
+   *
+   * @param trustStore trust store
+   * @return this
+   */
+  @CanIgnoreReturnValue
+  public JmxScraperContainer withTrustStore(TestKeyStore trustStore) {
+    this.trustStore = trustStore;
+    return this;
+  }
+
+  /**
+   * Enables connection to an SSL-protected RMI registry
+   *
+   * @return this
+   */
+  @CanIgnoreReturnValue
+  public JmxScraperContainer withSslRmiRegistry() {
+    this.sslRmiRegistry = true;
     return this;
   }
 
@@ -134,6 +208,13 @@ public class JmxScraperContainer extends GenericContainer<JmxScraperContainer> {
       arguments.add("-Dotel.jmx.password=" + password);
     }
 
+    arguments.addAll(addSecureStore(keyStore, /* isKeyStore= */ true));
+    arguments.addAll(addSecureStore(trustStore, /* isKeyStore= */ false));
+
+    if (sslRmiRegistry) {
+      arguments.add("-Dotel.jmx.remote.registry.ssl=true");
+    }
+
     if (!customYamlFiles.isEmpty()) {
       for (String yaml : customYamlFiles) {
         this.withCopyFileToContainer(MountableFile.forClasspathResource(yaml), yaml);
@@ -152,10 +233,32 @@ public class JmxScraperContainer extends GenericContainer<JmxScraperContainer> {
       arguments.add("io.opentelemetry.contrib.jmxscraper.JmxScraper");
     }
 
+    if (testJmx) {
+      arguments.add("-test");
+      this.waitingFor(Wait.forLogMessage(".*JMX connection test.*", 1));
+    } else {
+      this.waitingFor(
+          Wait.forLogMessage(".*JMX scraping started.*", 1)
+              .withStartupTimeout(Duration.ofSeconds(10)));
+    }
+
     this.withCommand(arguments.toArray(new String[0]));
 
     logger().info("Starting scraper with command: " + String.join(" ", arguments));
 
     super.start();
+  }
+
+  private List<String> addSecureStore(TestKeyStore keyStore, boolean isKeyStore) {
+    if (keyStore == null) {
+      return Collections.emptyList();
+    }
+    Path path = keyStore.getPath();
+    String containerPath = "/" + path.getFileName().toString();
+    this.withCopyFileToContainer(MountableFile.forHostPath(path), containerPath);
+
+    String prefix = String.format("-Djavax.net.ssl.%sStore", isKeyStore ? "key" : "trust");
+    return Arrays.asList(
+        prefix + "=" + containerPath, prefix + "Password=" + keyStore.getPassword());
   }
 }
